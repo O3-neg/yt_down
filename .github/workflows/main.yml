@@ -6,11 +6,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Build with Buildozer
         uses: ArtemSBulgakov/buildozer-action@v1
@@ -20,7 +20,7 @@ jobs:
           buildozer_version: stable
       
       - name: Upload APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: apk
+          name: youtube-downloader-apk
           path: ${{ steps.buildozer.outputs.filename }}
