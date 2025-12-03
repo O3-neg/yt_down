@@ -1,5 +1,4 @@
 name: Build APK
-
 on:
   push:
     branches: [ main ]
@@ -7,33 +6,54 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-
+    name: Build Android APK
+    runs-on: ubuntu-20.04
+    timeout-minutes: 90
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Build with Buildozer (Docker)
+        id: buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
         with:
-          python-version: '3.11'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk wget autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-
-      - name: Install Buildozer
-        run: |
-          pip install --upgrade pip
-          pip install buildozer cython
-
-      - name: Build APK
-        run: |
-          buildozer android debug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          workdir: .
+          buildozer_version: stable
+      
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
         with:
           name: youtube-downloader-apk
-          path: bin/*.apk
+          path: ${{ steps.buildozer.outputs.filename }}
+          if-no-files-found: error
+      
+      - name: Create Release
+        if: success() && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.buildozer.outputs.filename }}
+          tag_name: v2.0-build${{ github.run_number }}
+          name: YouTube Downloader v2.0 (Build ${{ github.run_number }})
+          body: |
+            ## 📱 YouTube Downloader v2.0
+            
+            ### ✨ Build Automático #${{ github.run_number }}
+            
+            **📥 Como instalar:**
+            1. Baixe o arquivo APK abaixo
+            2. No Android, habilite "Fontes desconhecidas" nas configurações
+            3. Instale o APK
+            
+            **🎯 Funcionalidades:**
+            - ✅ Download de vídeos do YouTube
+            - ✅ Download de playlists completas
+            - ✅ Conversão para MP3/MP4
+            - ✅ Sistema de cache inteligente
+            
+            ---
+            🔨 Commit: `${{ github.sha }}`
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
