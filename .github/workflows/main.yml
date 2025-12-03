@@ -1,0 +1,193 @@
+name: Build APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          df -h
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            ffmpeg \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libportmidi-dev \
+            libswscale-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            zlib1g-dev \
+            openjdk-17-jdk \
+            autoconf \
+            libtool \
+            pkg-config \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libncurses6 \
+            cmake \
+            libffi-dev \
+            libssl-dev \
+            zip \
+            unzip \
+            python3-pip \
+            wget \
+            curl
+      
+      - name: Set up Java
+        run: |
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
+      
+      - name: Cache pip packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+      
+      - name: Install Buildozer and dependencies
+        run: |
+          python3 -m pip install --upgrade pip setuptools wheel
+          pip3 install --upgrade buildozer
+          pip3 install --upgrade cython
+          pip3 install virtualenv
+      
+      - name: Cache Buildozer global
+        uses: actions/cache@v3
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-global-
+      
+      - name: Setup Android SDK/NDK
+        run: |
+          # Criar diretórios
+          mkdir -p ~/.buildozer/android/platform
+          cd ~/.buildozer/android/platform
+          
+          # Download Android SDK Command Line Tools
+          if [ ! -f "cmdline-tools.zip" ]; then
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          fi
+          
+          # Extrair e organizar
+          if [ ! -d "android-sdk/cmdline-tools/latest" ]; then
+            unzip -q cmdline-tools.zip
+            mkdir -p android-sdk/cmdline-tools
+            mv cmdline-tools android-sdk/cmdline-tools/latest
+          fi
+          
+          # Configurar ambiente
+          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+          export PATH="$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools"
+          
+          # Aceitar licenças e instalar componentes
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "platforms;android-33" "build-tools;33.0.2" "ndk;25.2.9519653" || true
+          
+          # Salvar variáveis de ambiente
+          echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/.buildozer/android/platform/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
+          echo "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$HOME/.buildozer/android/platform/android-sdk/platform-tools" >> $GITHUB_PATH
+      
+      - name: Fix permissions
+        run: |
+          sudo chown -R $USER:$USER $GITHUB_WORKSPACE || true
+          sudo chown -R $USER:$USER ~/.buildozer || true
+          chmod -R 755 $GITHUB_WORKSPACE || true
+      
+      - name: Verify setup
+        run: |
+          echo "=== Python version ==="
+          python --version
+          echo "=== Buildozer version ==="
+          buildozer --version
+          echo "=== Java version ==="
+          java -version
+          echo "=== Disk space ==="
+          df -h
+          echo "=== Environment ==="
+          env | grep -E 'ANDROID|JAVA|PATH'
+      
+      - name: Build APK (debug mode)
+        run: |
+          buildozer -v android debug 2>&1 | tee buildozer.log
+        continue-on-error: false
+      
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildozer-log
+          path: |
+            buildozer.log
+            .buildozer/android/platform/build-*/
+      
+      - name: Find APK
+        id: find-apk
+        run: |
+          echo "=== Looking for APK ==="
+          find . -name "*.apk" -type f
+          APK_PATH=$(find bin -name "*.apk" -type f 2>/dev/null | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find .buildozer -name "*.apk" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: APK not found!"
+            exit 1
+          fi
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "Found APK at: $APK_PATH"
+          ls -lh "$APK_PATH"
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-downloader-${{ github.run_number }}
+          path: ${{ steps.find-apk.outputs.apk_path }}
+          if-no-files-found: error
+      
+      - name: Create Release
+        if: github.ref == 'refs/heads/main' && success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.find-apk.outputs.apk_path }}
+          tag_name: v2.0-build${{ github.run_number }}
+          name: YouTube Downloader v2.0 (Build ${{ github.run_number }})
+          body: |
+            🎉 Build automático #${{ github.run_number }}
+            
+            📱 Baixe o APK e instale no seu Android
+            
+            ⚠️ Habilite "Instalar apps de fontes desconhecidas"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
