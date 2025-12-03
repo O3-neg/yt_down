@@ -1,27 +1,12 @@
-import subprocess
-import sys
 import os
+import sys
 import shutil
 import json
 import hashlib
 import threading
 
-def instalar_dependencias():
-    """Instala as dependências necessárias"""
-    try:
-        import kivy
-    except ImportError:
-        print("Instalando Kivy...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "kivy"])
-    
-    try:
-        import yt_dlp
-    except ImportError:
-        print("Instalando yt-dlp...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
-
-# Instala dependências
-instalar_dependencias()
+# Remove instalação automática de dependências (já vem no APK)
+# As dependências são instaladas pelo buildozer
 
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -45,17 +30,14 @@ def verificar_ffmpeg():
 
 def obter_caminho_base():
     """Retorna o caminho base onde o script está localizado"""
-    # Para executáveis compilados
     if hasattr(sys, '_MEIPASS'):
         return sys._MEIPASS
     
-    # Caminho do script Python
     script_path = os.path.dirname(os.path.abspath(__file__))
     return script_path
 
 def criar_estrutura_pastas():
     """Cria a estrutura de pastas assets/playlists e assets/cache"""
-    # Sempre usa o diretório do script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     base_dir = os.path.join(script_dir, 'YouTubeDownloader')
     
@@ -63,12 +45,15 @@ def criar_estrutura_pastas():
     try:
         from android.storage import primary_external_storage_path
         from android.permissions import request_permissions, Permission
-        request_permissions([Permission.WRITE_EXTERNAL_STORAGE, Permission.READ_EXTERNAL_STORAGE])
+        request_permissions([
+            Permission.WRITE_EXTERNAL_STORAGE, 
+            Permission.READ_EXTERNAL_STORAGE,
+            Permission.INTERNET
+        ])
         
         storage_path = primary_external_storage_path()
         base_dir = os.path.join(storage_path, 'YouTubeDownloader')
     except:
-        # Se não for Android ou falhar, usa o diretório do script
         pass
     
     pastas = [
@@ -80,35 +65,38 @@ def criar_estrutura_pastas():
     ]
     
     for pasta in pastas:
-        if not os.path.exists(pasta):
-            os.makedirs(pasta)
+        try:
+            if not os.path.exists(pasta):
+                os.makedirs(pasta)
+        except Exception as e:
+            print(f"Erro ao criar pasta {pasta}: {e}")
     
     return base_dir
 
 def carregar_cache():
     """Carrega o arquivo JSON com o histórico de downloads"""
-    base_path = criar_estrutura_pastas()
-    cache_file = os.path.join(base_path, 'cache', 'downloaded_tracks.json')
-    
-    if os.path.exists(cache_file):
-        try:
+    try:
+        base_path = criar_estrutura_pastas()
+        cache_file = os.path.join(base_path, 'cache', 'downloaded_tracks.json')
+        
+        if os.path.exists(cache_file):
             with open(cache_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
-            return {}
+    except Exception as e:
+        print(f"Erro ao carregar cache: {e}")
     
     return {}
 
 def salvar_cache(cache):
     """Salva o cache atualizado no arquivo JSON"""
-    base_path = criar_estrutura_pastas()
-    cache_file = os.path.join(base_path, 'cache', 'downloaded_tracks.json')
-    
     try:
+        base_path = criar_estrutura_pastas()
+        cache_file = os.path.join(base_path, 'cache', 'downloaded_tracks.json')
+        
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        pass
+        print(f"Erro ao salvar cache: {e}")
 
 def gerar_id_video(url_ou_id, formato='mp3'):
     """Gera um ID único para o vídeo incluindo o formato"""
@@ -123,7 +111,10 @@ def sanitizar_nome_arquivo(nome):
 
 def detectar_tipo_url(url):
     """Detecta se a URL é de uma playlist, vídeo individual ou clip"""
-    import yt_dlp
+    try:
+        import yt_dlp
+    except ImportError:
+        return None, "yt-dlp não está instalado"
     
     if '/clip/' in url:
         try:
@@ -160,15 +151,16 @@ def detectar_tipo_url(url):
 
 def obter_info_playlist(playlist_url):
     """Obtém informações sobre os vídeos da playlist"""
-    import yt_dlp
-    
-    ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True}
-    
     try:
+        import yt_dlp
+        
+        ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': True}
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(playlist_url, download=False)
             return info.get('entries', [])
     except Exception as e:
+        print(f"Erro ao obter playlist: {e}")
         return []
 
 def copiar_do_cache(video_hash, video_title, output_path, cache):
@@ -190,65 +182,68 @@ def copiar_do_cache(video_hash, video_title, output_path, cache):
         return True
         
     except Exception as e:
+        print(f"Erro ao copiar do cache: {e}")
         return False
 
 def download_para_cache(video_id, video_title, video_hash, cache, ffmpeg_disponivel, is_individual=False, formato_video='mp3'):
     """Baixa uma música/vídeo diretamente para o cache"""
-    import yt_dlp
-    
-    base_path = criar_estrutura_pastas()
-    
-    if is_individual:
-        if formato_video == 'mp4':
-            cache_path = os.path.join(base_path, 'cache', 'videos_individuais_mp4')
-            tipo = 'individual_mp4'
-            formato = 'mp4'
-        else:
-            cache_path = os.path.join(base_path, 'cache', 'videos_individuais_mp3')
-            tipo = 'individual_mp3'
-            formato = 'mp3' if ffmpeg_disponivel else 'm4a'
-    else:
-        cache_path = os.path.join(base_path, 'cache', 'musicas')
-        tipo = 'playlist'
-        formato = 'mp3' if ffmpeg_disponivel else 'm4a'
-    
-    nome_arquivo = f"{video_hash}.{formato}"
-    arquivo_cache = os.path.join(cache_path, nome_arquivo)
-    
-    opcoes_comuns = {
-        'quiet': True,
-        'no_warnings': True,
-        'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
-        'referer': 'https://www.youtube.com/',
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-    }
-    
-    if formato_video == 'mp4' and is_individual:
-        ydl_opts = {
-            'format': 'best[ext=mp4]/best',
-            'outtmpl': arquivo_cache,
-            **opcoes_comuns
-        }
-    elif ffmpeg_disponivel and formato_video == 'mp3':
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': os.path.join(cache_path, f"{video_hash}.%(ext)s"),
-            **opcoes_comuns
-        }
-    else:
-        ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio',
-            'outtmpl': arquivo_cache,
-            **opcoes_comuns
-        }
+    try:
+        import yt_dlp
+    except ImportError:
+        return False, "yt-dlp não está disponível"
     
     try:
+        base_path = criar_estrutura_pastas()
+        
+        if is_individual:
+            if formato_video == 'mp4':
+                cache_path = os.path.join(base_path, 'cache', 'videos_individuais_mp4')
+                tipo = 'individual_mp4'
+                formato = 'mp4'
+            else:
+                cache_path = os.path.join(base_path, 'cache', 'videos_individuais_mp3')
+                tipo = 'individual_mp3'
+                formato = 'mp3' if ffmpeg_disponivel else 'm4a'
+        else:
+            cache_path = os.path.join(base_path, 'cache', 'musicas')
+            tipo = 'playlist'
+            formato = 'mp3' if ffmpeg_disponivel else 'm4a'
+        
+        nome_arquivo = f"{video_hash}.{formato}"
+        arquivo_cache = os.path.join(cache_path, nome_arquivo)
+        
+        opcoes_comuns = {
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'user_agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36',
+            'referer': 'https://www.youtube.com/',
+        }
+        
+        if formato_video == 'mp4' and is_individual:
+            ydl_opts = {
+                'format': 'best[ext=mp4]/best',
+                'outtmpl': arquivo_cache,
+                **opcoes_comuns
+            }
+        elif ffmpeg_disponivel and formato_video == 'mp3':
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'outtmpl': os.path.join(cache_path, f"{video_hash}.%(ext)s"),
+                **opcoes_comuns
+            }
+        else:
+            ydl_opts = {
+                'format': 'bestaudio[ext=m4a]/bestaudio',
+                'outtmpl': arquivo_cache,
+                **opcoes_comuns
+            }
+        
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -276,10 +271,8 @@ class YouTubeDownloaderApp(App):
     def build(self):
         self.title = 'YouTube Downloader'
         
-        # Layout principal
         layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
-        # Título
         title = Label(text='[b]YouTube Downloader[/b]', 
                      markup=True, 
                      size_hint_y=None, 
@@ -287,7 +280,6 @@ class YouTubeDownloaderApp(App):
                      font_size='20sp')
         layout.add_widget(title)
         
-        # URL Input
         url_label = Label(text='URL (Playlist, Vídeo ou Clip):', 
                          size_hint_y=None, 
                          height=30,
@@ -301,7 +293,6 @@ class YouTubeDownloaderApp(App):
                                    font_size='14sp')
         layout.add_widget(self.url_input)
         
-        # Nome da Playlist
         nome_label = Label(text='Nome da Playlist:', 
                           size_hint_y=None, 
                           height=30,
@@ -315,7 +306,6 @@ class YouTubeDownloaderApp(App):
                                    font_size='14sp')
         layout.add_widget(self.nome_input)
         
-        # Botões de formato
         formato_layout = BoxLayout(size_hint_y=None, height=50, spacing=10)
         formato_label = Label(text='Formato (vídeos):', font_size='14sp')
         formato_layout.add_widget(formato_label)
@@ -326,7 +316,6 @@ class YouTubeDownloaderApp(App):
         formato_layout.add_widget(self.btn_mp4)
         layout.add_widget(formato_layout)
         
-        # Botão de download
         self.download_btn = Button(text='Iniciar Download',
                                   size_hint_y=None,
                                   height=60,
@@ -335,20 +324,17 @@ class YouTubeDownloaderApp(App):
         self.download_btn.bind(on_press=self.iniciar_download)
         layout.add_widget(self.download_btn)
         
-        # Barra de progresso
         self.progress = ProgressBar(max=100, 
                                    size_hint_y=None, 
                                    height=30)
         layout.add_widget(self.progress)
         
-        # Status
         self.status_label = Label(text='Aguardando...', 
                                  size_hint_y=None, 
                                  height=30,
                                  font_size='12sp')
         layout.add_widget(self.status_label)
         
-        # Log (ScrollView)
         log_scroll = ScrollView(size_hint=(1, 1))
         self.log_label = Label(text='',
                               size_hint_y=None,
@@ -360,7 +346,6 @@ class YouTubeDownloaderApp(App):
         log_scroll.add_widget(self.log_label)
         layout.add_widget(log_scroll)
         
-        # Info de cache
         cache = carregar_cache()
         mp3_ind = sum(1 for v in cache.values() if v.get('tipo') == 'individual_mp3')
         mp4_ind = sum(1 for v in cache.values() if v.get('tipo') == 'individual_mp4')
@@ -380,19 +365,15 @@ class YouTubeDownloaderApp(App):
         return layout
     
     def log(self, mensagem):
-        """Adiciona mensagem ao log"""
         Clock.schedule_once(lambda dt: self._log_ui(mensagem))
     
     def _log_ui(self, mensagem):
-        """Atualiza o log na UI thread"""
         self.log_label.text += mensagem + '\n'
     
     def atualizar_status(self, mensagem):
-        """Atualiza o status"""
         Clock.schedule_once(lambda dt: setattr(self.status_label, 'text', mensagem))
     
     def mostrar_popup(self, titulo, mensagem):
-        """Mostra um popup"""
         def _show():
             content = BoxLayout(orientation='vertical', padding=10)
             content.add_widget(Label(text=mensagem))
@@ -406,7 +387,6 @@ class YouTubeDownloaderApp(App):
         Clock.schedule_once(lambda dt: _show())
     
     def iniciar_download(self, instance):
-        """Inicia o download em thread separada"""
         url = self.url_input.text.strip()
         nome = self.nome_input.text.strip()
         formato = 'mp3' if self.btn_mp3.state == 'down' else 'mp4'
@@ -415,12 +395,10 @@ class YouTubeDownloaderApp(App):
             self.mostrar_popup('Atenção', 'Por favor, insira a URL!')
             return
         
-        # Normaliza URL
         if not url.startswith('http'):
             if url.startswith('www.') or url.startswith('youtube.com') or url.startswith('youtu.be'):
                 url = 'https://' + url
         
-        # Remove playlist automática
         if '?list=RD' in url or '&list=RD' in url:
             import re
             video_match = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
@@ -437,7 +415,6 @@ class YouTubeDownloaderApp(App):
         thread.start()
     
     def processar_download(self, url, nome, formato):
-        """Processa o download"""
         try:
             self.log('\n[b]Detectando tipo...[/b]')
             tipo, info = detectar_tipo_url(url)
@@ -466,7 +443,6 @@ class YouTubeDownloaderApp(App):
             Clock.schedule_once(lambda dt: setattr(self.progress, 'value', 0))
     
     def download_video(self, url, info, formato):
-        """Baixa vídeo individual"""
         base_path = criar_estrutura_pastas()
         cache = carregar_cache()
         
@@ -498,11 +474,15 @@ class YouTubeDownloaderApp(App):
             self.mostrar_popup('Erro', erro)
     
     def download_playlist(self, url, nome):
-        """Baixa playlist"""
         base_path = criar_estrutura_pastas()
         output_path = os.path.join(base_path, 'playlists', nome)
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
+        
+        try:
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
+        except Exception as e:
+            self.log(f'[color=ff0000]Erro ao criar pasta: {e}[/color]')
+            return
         
         cache = carregar_cache()
         ffmpeg_disponivel = verificar_ffmpeg()
