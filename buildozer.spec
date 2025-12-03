@@ -13,6 +13,9 @@ android.api = 31
 android.minapi = 21
 android.ndk = 23b
 android.arch = armeabi-v7a
+android.gradle_dependencies = 
+android.enable_androidx = True
+p4a.branch = master
 
 [buildozer]
 log_level = 2
